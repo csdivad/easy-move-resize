@@ -27,3 +27,6 @@ DerivedData
 
 # mardown previews
 *.md.html
+
+# Local secrets for act / sign-and-notarize.sh
+.secrets
