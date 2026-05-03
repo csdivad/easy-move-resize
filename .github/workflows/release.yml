@@ -75,7 +75,6 @@ jobs:
 
   sign-and-notarize:
     name: sign + notarize (macOS)
-    environment: release
     runs-on: macos-latest
     needs: archive
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
