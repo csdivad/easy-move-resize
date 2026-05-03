@@ -18,7 +18,7 @@ jobs:
     name: validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Sanity-check repo layout
         run: |
@@ -43,7 +43,7 @@ jobs:
     runs-on: macos-latest
     needs: build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Show Xcode version
         run: xcodebuild -version
@@ -66,7 +66,7 @@ jobs:
           mkdir -p artifact
           ditto -c -k --keepParent "$APP" "artifact/Easy Move+Resize.unsigned.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: easy-move-resize-unsigned
           path: artifact/Easy Move+Resize.unsigned.zip
@@ -82,9 +82,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: easy-move-resize-unsigned
           path: artifact
@@ -106,7 +106,7 @@ jobs:
           DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
         run: ./scripts/sign-and-notarize.sh "dist/Easy Move+Resize.app"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: easy-move-resize-signed
           path: dist/Easy Move+Resize.zip
