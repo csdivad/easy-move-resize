@@ -1,0 +1,122 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v1.2.3). Creates a tag and GitHub Release.'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sanity-check repo layout
+        run: |
+          set -euo pipefail
+          test -f easy-move-resize.xcodeproj/project.pbxproj
+          test -f easy-move-resize/easy-move-resize-Info.plist
+          test -x scripts/sign-and-notarize.sh
+
+      - name: Shellcheck the sign script
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            apt-get update && apt-get install -y shellcheck || sudo apt-get install -y shellcheck
+          fi
+          shellcheck scripts/sign-and-notarize.sh
+
+      - name: Validate Info.plist (xml well-formed)
+        run: |
+          python3 -c "import plistlib,sys; plistlib.loads(open('easy-move-resize/easy-move-resize-Info.plist','rb').read())"
+
+  archive:
+    name: archive (macOS)
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build .app (unsigned)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project easy-move-resize.xcodeproj \
+            -scheme easy-move-resize \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
+
+          APP="build/Build/Products/Release/Easy Move+Resize.app"
+          test -d "$APP" || { echo "missing built app at: $APP"; exit 1; }
+
+          # Tar preserves perms/symlinks across artifact upload/download.
+          mkdir -p artifact
+          ditto -c -k --keepParent "$APP" "artifact/Easy Move+Resize.unsigned.zip"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: easy-move-resize-unsigned
+          path: artifact/Easy Move+Resize.unsigned.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-and-notarize:
+    name: sign + notarize (macOS)
+    runs-on: macos-latest
+    needs: archive
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: easy-move-resize-unsigned
+          path: artifact
+
+      - name: Unzip built app
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ditto -x -k "artifact/Easy Move+Resize.unsigned.zip" dist
+          test -d "dist/Easy Move+Resize.app"
+
+      - name: Sign, notarize, staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: ./scripts/sign-and-notarize.sh "dist/Easy Move+Resize.app"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: easy-move-resize-signed
+          path: dist/Easy Move+Resize.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/Easy Move+Resize.zip

@@ -44,6 +44,33 @@ brew install --cask easy-move-plus-resize
 
 ## Release process
 
+### Automated (GitHub Actions)
+
+Releases can be built, signed, notarized, and published automatically via the [`release`](.github/workflows/release.yml) workflow.
+
+Prerequisites — the following secrets must be configured in the repository's GitHub Actions settings:
+
+- `APPLE_ID` — Apple ID email used for notarization
+- `APPLE_TEAM_ID` — Apple Developer Team ID
+- `APPLE_APP_PASSWORD` — app-specific password for the Apple ID
+- `DEVELOPER_ID_APPLICATION` — full name of the Developer ID Application signing identity (e.g. `Developer ID Application: Your Name (TEAMID)`)
+- `DEVELOPER_ID_CERT_P12_BASE64` — base64-encoded `.p12` export of the Developer ID Application certificate
+- `DEVELOPER_ID_CERT_PASSWORD` — password for the `.p12` file
+
+Steps:
+
+- Choose a new version number following [semantic versioning guidelines](https://semver.org)
+- Update the version number in [`easy-move-resize/easy-move-resize-Info.plist`](easy-move-resize/easy-move-resize-Info.plist), ([example](https://github.com/dmarcotte/easy-move-resize/commit/18d759dec2caf7a33b0625c17c181a195191bc92))
+- Commit and push the version number update
+- `git tag <chosen version number>`
+- `git push origin --tags`
+- On GitHub, go to the [Actions tab](https://github.com/dmarcotte/easy-move-resize/actions), select the **release** workflow, and click **Run workflow**
+- Enter the release version (e.g. `v1.2.3`), toggle **Mark as pre-release** if applicable, then click **Run workflow**
+- The workflow validates the repo, builds the `.app` with `xcodebuild`, signs/notarizes/staples it, creates the git tag, and publishes a GitHub Release with the signed zip attached
+- Once the workflow completes, the new release will appear on the [Releases page](https://github.com/dmarcotte/easy-move-resize/releases)
+
+### Manual (backup)
+
 - Choose a new version number following [semantic versioning guidelines](https://semver.org)
 - Update the version number in [`easy-move-resize/easy-move-resize-Info.plist`](easy-move-resize/easy-move-resize-Info.plist), ([example](https://github.com/dmarcotte/easy-move-resize/commit/18d759dec2caf7a33b0625c17c181a195191bc92))
 - Commit and push the version number update
