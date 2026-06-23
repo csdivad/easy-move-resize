@@ -120,27 +120,36 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
     os_unfair_lock_lock(&_displayStateLock);
     EMRDisplayState snapshot = _displayState;
     _displayState.dirty = NO;
+    // Retain the window while still holding the lock so it cannot be released
+    // by setWindow: on the main thread between here and the AX calls below,
+    // which run on the display-link thread outside the lock.
+    AXUIElementRef window = snapshot.window;
+    if (window != NULL) CFRetain(window);
     os_unfair_lock_unlock(&_displayStateLock);
 
-    if (!snapshot.dirty || snapshot.window == NULL) {
+    if (window == NULL) {
         return;
     }
 
-    if (snapshot.operation == EMROperationMove) {
-        CFTypeRef _position = (CFTypeRef)(AXValueCreate(kAXValueCGPointType, (const void *)&snapshot.position));
-        AXUIElementSetAttributeValue(snapshot.window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, (CFTypeRef *)_position);
-        if (_position != NULL) CFRelease(_position);
-    } else if (snapshot.operation == EMROperationResize) {
-        if (snapshot.resizeSection.xResizeDirection == left || snapshot.resizeSection.yResizeDirection == bottom) {
+    if (snapshot.dirty) {
+        if (snapshot.operation == EMROperationMove) {
             CFTypeRef _position = (CFTypeRef)(AXValueCreate(kAXValueCGPointType, (const void *)&snapshot.position));
-            AXUIElementSetAttributeValue(snapshot.window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, (CFTypeRef *)_position);
-            CFRelease(_position);
-        }
+            AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, (CFTypeRef *)_position);
+            if (_position != NULL) CFRelease(_position);
+        } else if (snapshot.operation == EMROperationResize) {
+            if (snapshot.resizeSection.xResizeDirection == left || snapshot.resizeSection.yResizeDirection == bottom) {
+                CFTypeRef _position = (CFTypeRef)(AXValueCreate(kAXValueCGPointType, (const void *)&snapshot.position));
+                AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, (CFTypeRef *)_position);
+                CFRelease(_position);
+            }
 
-        CFTypeRef _size = (CFTypeRef)(AXValueCreate(kAXValueCGSizeType, (const void *)&snapshot.size));
-        AXUIElementSetAttributeValue(snapshot.window, (__bridge CFStringRef)NSAccessibilitySizeAttribute, (CFTypeRef *)_size);
-        CFRelease(_size);
+            CFTypeRef _size = (CFTypeRef)(AXValueCreate(kAXValueCGSizeType, (const void *)&snapshot.size));
+            AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilitySizeAttribute, (CFTypeRef *)_size);
+            CFRelease(_size);
+        }
     }
+
+    CFRelease(window);
 }
 
 - (void)dealloc {
