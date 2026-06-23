@@ -67,7 +67,12 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
         CVDisplayLinkRelease(_displayLink);
         _displayLink = NULL;
     }
-    CVDisplayLinkCreateWithActiveCGDisplays(&_displayLink);
+    CVReturn err = CVDisplayLinkCreateWithActiveCGDisplays(&_displayLink);
+    if (err != kCVReturnSuccess || _displayLink == NULL) {
+        NSLog(@"ERROR: Could not create CVDisplayLink (%d)", err);
+        _displayLink = NULL;
+        return;
+    }
     CVDisplayLinkSetOutputCallback(_displayLink, &displayLinkCallback, (__bridge void *)self);
     if (wasRunning) {
         CVDisplayLinkStart(_displayLink);
