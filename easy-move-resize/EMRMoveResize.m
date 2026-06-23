@@ -58,14 +58,20 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
 }
 
 - (void)setupDisplayLink {
+    // Preserve the running state so recreating the link mid-drag (e.g. on a
+    // display configuration change) does not silently stop an active drag.
+    BOOL wasRunning = NO;
     if (_displayLink != NULL) {
+        wasRunning = CVDisplayLinkIsRunning(_displayLink);
         CVDisplayLinkStop(_displayLink);
         CVDisplayLinkRelease(_displayLink);
         _displayLink = NULL;
     }
     CVDisplayLinkCreateWithActiveCGDisplays(&_displayLink);
     CVDisplayLinkSetOutputCallback(_displayLink, &displayLinkCallback, (__bridge void *)self);
-    CVDisplayLinkStart(_displayLink);
+    if (wasRunning) {
+        CVDisplayLinkStart(_displayLink);
+    }
 }
 
 - (void)startDisplayLink {
@@ -73,9 +79,19 @@ static CVReturn displayLinkCallback(CVDisplayLinkRef displayLink,
     _displayState.dirty = NO;
     _displayState.window = _window;
     os_unfair_lock_unlock(&_displayStateLock);
+
+    // Only run the link while a drag is in progress, so we don't wake the CPU
+    // at every vsync when the user isn't moving a window.
+    if (_displayLink != NULL) {
+        CVDisplayLinkStart(_displayLink);
+    }
 }
 
 - (void)stopDisplayLink {
+    if (_displayLink != NULL) {
+        CVDisplayLinkStop(_displayLink);
+    }
+
     os_unfair_lock_lock(&_displayStateLock);
     _displayState.dirty = NO;
     _displayState.window = NULL;
