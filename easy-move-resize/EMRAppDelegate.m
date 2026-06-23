@@ -2,8 +2,14 @@
 #import "EMRMoveResize.h"
 #import "EMRPreferences.h"
 
+@interface EMRAppDelegate ()
+- (AXUIElementRef)windowAtPoint:(CGPoint)point CF_RETURNS_RETAINED;
+- (void)toggleZoomForWindow:(AXUIElementRef)window;
+@end
+
 @implementation EMRAppDelegate {
     EMRPreferences *preferences;
+    NSMutableDictionary *_zoomRestoreFrames;
 }
 
 - (id) init  {
@@ -11,6 +17,7 @@
     if (self) {
         NSUserDefaults *userDefaults = [[NSUserDefaults alloc] initWithSuiteName:@"userPrefs"];
         preferences = [[EMRPreferences alloc] initWithUserDefaults:userDefaults];
+        _zoomRestoreFrames = [[NSMutableDictionary alloc] init];
     }
     return self;
 }
@@ -59,6 +66,26 @@ CGEventRef myCGEventCallback(CGEventTapProxy __unused proxy, CGEventType type, C
     if (flags & ignoredKeysMask) {
         // also ignore this event if we've got extra modifiers (i.e. holding down Cmd+Ctrl+Alt should not invoke our action)
         return event;
+    }
+
+    // Double-click with modifier keys: toggle maximize/restore (like double-clicking the title bar).
+    if (type == kCGEventLeftMouseDown) {
+        int64_t clickCount = CGEventGetIntegerValueField(event, kCGMouseEventClickState);
+        if (clickCount == 2) {
+            CGPoint mouseLocation = CGEventGetLocation(event);
+            AXUIElementRef clickedWindow = [ourDelegate windowAtPoint:mouseLocation];
+            if (clickedWindow != NULL) {
+                pid_t pid;
+                if (!AXUIElementGetPid(clickedWindow, &pid)) {
+                    NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+                    if ([[ourDelegate getDisabledApps] objectForKey:[app bundleIdentifier]] == nil) {
+                        [ourDelegate toggleZoomForWindow:clickedWindow];
+                    }
+                }
+                CFRelease(clickedWindow);
+            }
+            return NULL;
+        }
     }
 
     if ((type == kCGEventLeftMouseDown && !resizeOnly)
@@ -509,6 +536,105 @@ CGEventRef myCGEventCallback(CGEventTapProxy __unused proxy, CGEventType type, C
     }
     [_disabledAppsMenu setSubmenu:submenu];
     [_disabledAppsMenu setEnabled:([disabledApps count] > 0)];
+}
+
+// Returns a retained reference to the window element at the given Quartz point, or NULL.
+- (AXUIElementRef)windowAtPoint:(CGPoint)point CF_RETURNS_RETAINED {
+    AXUIElementRef systemWide = AXUIElementCreateSystemWide();
+    AXUIElementRef result = NULL;
+    AXUIElementRef element = NULL;
+
+    if (AXUIElementCopyElementAtPosition(systemWide, (float)point.x, (float)point.y, &element) == kAXErrorSuccess && element != NULL) {
+        CFTypeRef windowRef = NULL;
+        if (AXUIElementCopyAttributeValue(element, (__bridge CFStringRef)NSAccessibilityWindowAttribute, &windowRef) == kAXErrorSuccess && windowRef != NULL) {
+            result = (AXUIElementRef)windowRef;
+        } else {
+            CFTypeRef role = NULL;
+            if (AXUIElementCopyAttributeValue(element, (__bridge CFStringRef)NSAccessibilityRoleAttribute, &role) == kAXErrorSuccess) {
+                if (role != NULL && [(__bridge NSString *)role isEqualToString:NSAccessibilityWindowRole]) {
+                    result = (AXUIElementRef)CFRetain(element);
+                }
+                if (role != NULL) CFRelease(role);
+            }
+        }
+        CFRelease(element);
+    }
+    CFRelease(systemWide);
+    return result;
+}
+
+// Toggles a window between filling the screen's visible area and its previous frame.
+// AX window positions use Quartz coordinates (origin at top-left of primary screen).
+// NSScreen uses AppKit coordinates (origin at bottom-left of primary screen).
+- (void)toggleZoomForWindow:(AXUIElementRef)window {
+    CFTypeRef posRef = nil;
+    NSPoint currentPos = NSZeroPoint;
+    if (AXUIElementCopyAttributeValue(window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, &posRef) == kAXErrorSuccess) {
+        AXValueGetValue((AXValueRef)posRef, kAXValueCGPointType, (void *)&currentPos);
+        CFRelease(posRef);
+    }
+
+    CFTypeRef sizeRef = nil;
+    NSSize currentSize = NSZeroSize;
+    if (AXUIElementCopyAttributeValue(window, (__bridge CFStringRef)NSAccessibilitySizeAttribute, &sizeRef) == kAXErrorSuccess) {
+        AXValueGetValue((AXValueRef)sizeRef, kAXValueCGSizeType, (void *)&currentSize);
+        CFRelease(sizeRef);
+    }
+
+    if (NSEqualSizes(currentSize, NSZeroSize)) return;
+
+    // Find which screen the window is on by its center point.
+    CGFloat primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
+    NSPoint windowCenterCocoa = NSMakePoint(currentPos.x + currentSize.width / 2.0,
+                                             primaryHeight - currentPos.y - currentSize.height / 2.0);
+    NSScreen *targetScreen = [NSScreen mainScreen];
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSPointInRect(windowCenterCocoa, [screen frame])) {
+            targetScreen = screen;
+            break;
+        }
+    }
+
+    // Convert the screen's visible frame to Quartz coordinates.
+    NSRect cocoaVisible = [targetScreen visibleFrame];
+    NSPoint maxPos = NSMakePoint(cocoaVisible.origin.x,
+                                  primaryHeight - cocoaVisible.origin.y - cocoaVisible.size.height);
+    NSSize maxSize = cocoaVisible.size;
+
+    const CGFloat kTolerance = 4.0;
+    BOOL isMaximized = (fabs(currentPos.x - maxPos.x) < kTolerance &&
+                        fabs(currentPos.y - maxPos.y) < kTolerance &&
+                        fabs(currentSize.width - maxSize.width) < kTolerance &&
+                        fabs(currentSize.height - maxSize.height) < kTolerance);
+
+    pid_t pid;
+    AXUIElementGetPid(window, &pid);
+    NSNumber *key = @(pid);
+
+    NSPoint newPos;
+    NSSize newSize;
+
+    if (isMaximized) {
+        NSValue *savedFrame = _zoomRestoreFrames[key];
+        if (savedFrame == nil) return;
+        NSRect restoreRect = [savedFrame rectValue];
+        newPos = restoreRect.origin;
+        newSize = restoreRect.size;
+        [_zoomRestoreFrames removeObjectForKey:key];
+    } else {
+        _zoomRestoreFrames[key] = [NSValue valueWithRect:NSMakeRect(currentPos.x, currentPos.y,
+                                                                     currentSize.width, currentSize.height)];
+        newPos = maxPos;
+        newSize = maxSize;
+    }
+
+    CFTypeRef posValue = AXValueCreate(kAXValueCGPointType, (const void *)&newPos);
+    AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, posValue);
+    CFRelease(posValue);
+
+    CFTypeRef sizeValue = AXValueCreate(kAXValueCGSizeType, (const void *)&newSize);
+    AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilitySizeAttribute, sizeValue);
+    CFRelease(sizeValue);
 }
 
 @end
