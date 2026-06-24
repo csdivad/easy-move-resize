@@ -174,7 +174,9 @@ CGEventRef myCGEventCallback(CGEventTapProxy __unused proxy, CGEventType type, C
         thePoint.y = cTopLeft.y + deltaY;
         [moveResize setWndPosition:thePoint];
         [moveResize updatePosition:thePoint];
-        handled = YES;
+        // Intentionally not setting handled=YES: letting the event pass through
+        // so the window server updates the cursor position. Without this, the
+        // cursor visually freezes during a drag even though the window moves.
     }
 
     if (type == resizeModifierDown) {
@@ -264,7 +266,7 @@ CGEventRef myCGEventCallback(CGEventTapProxy __unused proxy, CGEventType type, C
         [moveResize setWndPosition:cTopLeft];
         [moveResize setWndSize:wndSize];
         [moveResize updatePositionAndSize:cTopLeft size:wndSize resizeSection:resizeSection];
-        handled = YES;
+        // Intentionally not setting handled=YES: same cursor-freeze fix as the move drag above.
     }
 
     if ((type == kCGEventLeftMouseUp || type == resizeModifierUp)
