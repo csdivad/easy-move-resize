@@ -5,6 +5,7 @@
 @interface EMRAppDelegate ()
 - (AXUIElementRef)windowAtPoint:(CGPoint)point CF_RETURNS_RETAINED;
 - (void)toggleZoomForWindow:(AXUIElementRef)window;
+- (BOOL)restoreWindowIfMaximized:(AXUIElementRef)window mouseLocation:(CGPoint)mouseLocation updatedPosition:(NSPoint *)outPosition;
 @end
 
 @implementation EMRAppDelegate {
@@ -148,6 +149,16 @@ CGEventRef myCGEventCallback(CGEventTapProxy __unused proxy, CGEventType type, C
         [moveResize setWndPosition:cTopLeft];
         [moveResize setWindow:_clickedWindow];
         if (_clickedWindow != nil) CFRelease(_clickedWindow);
+
+        if (type == kCGEventLeftMouseDown) {
+            NSPoint restoredPosition;
+            if ([ourDelegate restoreWindowIfMaximized:[moveResize window]
+                                        mouseLocation:mouseLocation
+                                      updatedPosition:&restoredPosition]) {
+                [moveResize setWndPosition:restoredPosition];
+            }
+        }
+
         [moveResize startDisplayLink];
         handled = YES;
     }
@@ -635,6 +646,74 @@ CGEventRef myCGEventCallback(CGEventTapProxy __unused proxy, CGEventType type, C
     CFTypeRef sizeValue = AXValueCreate(kAXValueCGSizeType, (const void *)&newSize);
     AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilitySizeAttribute, sizeValue);
     CFRelease(sizeValue);
+}
+
+// When a move drag starts on a maximized window, restores it to the pre-maximize size
+// and repositions so the cursor stays at the same relative horizontal position.
+// Returns YES and writes the new top-left into outPosition if a restore was performed.
+- (BOOL)restoreWindowIfMaximized:(AXUIElementRef)window
+                   mouseLocation:(CGPoint)mouseLocation
+                 updatedPosition:(NSPoint *)outPosition {
+    CFTypeRef posRef = nil;
+    NSPoint currentPos = NSZeroPoint;
+    if (AXUIElementCopyAttributeValue(window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, &posRef) != kAXErrorSuccess) return NO;
+    AXValueGetValue((AXValueRef)posRef, kAXValueCGPointType, (void *)&currentPos);
+    CFRelease(posRef);
+
+    CFTypeRef sizeRef = nil;
+    NSSize currentSize = NSZeroSize;
+    if (AXUIElementCopyAttributeValue(window, (__bridge CFStringRef)NSAccessibilitySizeAttribute, &sizeRef) != kAXErrorSuccess) return NO;
+    AXValueGetValue((AXValueRef)sizeRef, kAXValueCGSizeType, (void *)&currentSize);
+    CFRelease(sizeRef);
+
+    if (currentSize.width <= 0 || currentSize.height <= 0) return NO;
+
+    CGFloat ratioX = (mouseLocation.x - currentPos.x) / currentSize.width;
+    ratioX = fmax(0.0, fmin(1.0, ratioX));
+
+    CGFloat primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
+    NSPoint windowCenterCocoa = NSMakePoint(currentPos.x + currentSize.width / 2.0,
+                                             primaryHeight - currentPos.y - currentSize.height / 2.0);
+    NSScreen *targetScreen = [NSScreen mainScreen];
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSPointInRect(windowCenterCocoa, [screen frame])) {
+            targetScreen = screen;
+            break;
+        }
+    }
+    NSRect cocoaVisible = [targetScreen visibleFrame];
+    NSPoint maxPos = NSMakePoint(cocoaVisible.origin.x,
+                                  primaryHeight - cocoaVisible.origin.y - cocoaVisible.size.height);
+    NSSize maxSize = cocoaVisible.size;
+
+    const CGFloat kTolerance = 4.0;
+    BOOL isCustomMaximized = (fabs(currentPos.x - maxPos.x) < kTolerance &&
+                               fabs(currentPos.y - maxPos.y) < kTolerance &&
+                               fabs(currentSize.width - maxSize.width) < kTolerance &&
+                               fabs(currentSize.height - maxSize.height) < kTolerance);
+    if (!isCustomMaximized) return NO;
+
+    pid_t pid;
+    AXUIElementGetPid(window, &pid);
+    NSValue *savedFrame = _zoomRestoreFrames[@(pid)];
+    if (savedFrame == nil) return NO;
+
+    NSRect restoreRect = [savedFrame rectValue];
+    if (restoreRect.size.width <= 0 || restoreRect.size.height <= 0) return NO;
+
+    NSPoint newPos = NSMakePoint(mouseLocation.x - ratioX * restoreRect.size.width, mouseLocation.y);
+
+    CFTypeRef posValue = AXValueCreate(kAXValueCGPointType, (const void *)&newPos);
+    AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilityPositionAttribute, posValue);
+    CFRelease(posValue);
+
+    CFTypeRef sizeValue = AXValueCreate(kAXValueCGSizeType, (const void *)&restoreRect.size);
+    AXUIElementSetAttributeValue(window, (__bridge CFStringRef)NSAccessibilitySizeAttribute, sizeValue);
+    CFRelease(sizeValue);
+
+    [_zoomRestoreFrames removeObjectForKey:@(pid)];
+    *outPosition = newPos;
+    return YES;
 }
 
 @end
